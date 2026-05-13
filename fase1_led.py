@@ -6,18 +6,17 @@ import paho.mqtt.client as mqtt
 GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
+# ===== CONFIGURACION GPIO =====
 LED_ROJO_A = 17      # Peligro zona A
 LED_ROJO_B = 27      # Peligro zona B
 LED_VERDE_A = 22     # Salida A segura
 LED_VERDE_B = 23     # Salida B segura
 
-
 BOTON_A = 5          # Emergencia zona A
 BOTON_B = 6          # Emergencia zona B
 
 BUZZER = 25
-
-SERVO=12
+SERVO = 12
 
 # LCD
 lcd = CharLCD(
@@ -28,7 +27,7 @@ lcd = CharLCD(
     rows=2
 )
 
-#ultrasonidos
+# Ultrasonidos (sensor de presencia)
 TRIG = 18
 ECHO = 24
 
@@ -42,31 +41,118 @@ GPIO.setup(LED_VERDE_B, GPIO.OUT)
 GPIO.setup(BOTON_A, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 GPIO.setup(BOTON_B, GPIO.IN, pull_up_down=GPIO.PUD_UP)
 
-#configuracion buzzer
+# Configuracion buzzer
 GPIO.setup(BUZZER, GPIO.OUT)
 
-#configuracion servo
+# Configuracion servo
 GPIO.setup(SERVO, GPIO.OUT)
-
 pwm = GPIO.PWM(SERVO, 50)  # 50Hz
 pwm.start(0)
 
-#configuracion ultrasonidos
+# Configuracion ultrasonidos
 GPIO.setup(TRIG, GPIO.OUT)
 GPIO.setup(ECHO, GPIO.IN)
 
+# ===== CONFIGURACION MQTT =====
 BROKER = "localhost"
-client = mqtt.Client()
-client.connect(BROKER, 1883, 60)
-client.loop_start()
+PUERTO = 1883
+KEEPALIVE = 60
 
+# Topics MQTT organizados por jerarquía
+TOPICS = {
+    "estado": "casa/incendio/estado",           # NORMAL, A, B
+    "distancia": "casa/incendio/sensor/distancia",
+    "presencia": "casa/incendio/sensor/presencia",
+    "salida_recomendada": "casa/incendio/salida_recomendada",
+    "buzzer": "casa/incendio/buzzer",
+    "comando": "casa/incendio/comando"
+}
+
+# Variables globales
 estado = "NORMAL"
 ultimo_estado = None
+persona_detectada = False
+ultimo_envio_mqtt = 0
+mqtt_conectado = False
 
-def publicar_mqtt(distancia, persona):
-    client.publish("casa/estado", estado)
-    client.publish("casa/distancia", round(distancia, 2))
-    client.publish("casa/presencia", str(persona))
+# ===== CALLBACKS MQTT =====
+def on_connect(client, userdata, flags, rc):
+    """Callback ejecutado cuando el cliente se conecta al broker"""
+    global mqtt_conectado
+    if rc == 0:
+        print("[MQTT] Conexión exitosa al broker")
+        mqtt_conectado = True
+        # Suscribirse a tópicos (si en el futuro quieres comandos remotos)
+        client.subscribe(TOPICS["comando"])
+        print(f"[MQTT] Suscrito a: {TOPICS['comando']}")
+    else:
+        print(f"[MQTT] Error de conexión, código: {rc}")
+        mqtt_conectado = False
+
+def on_disconnect(client, userdata, rc):
+    """Callback ejecutado cuando el cliente se desconecta"""
+    global mqtt_conectado
+    mqtt_conectado = False
+    if rc != 0:
+        print(f"[MQTT] Desconexión inesperada, código: {rc}")
+
+def on_publish(client, userdata, mid):
+    """Callback ejecutado cuando se publica un mensaje"""
+    pass  # Opcional: usar para debug
+
+def on_message(client, userdata, msg):
+    """Callback ejecutado cuando se recibe un mensaje en un tópico suscrito"""
+    global estado
+    if msg.topic == TOPICS["comando"]:
+        comando = msg.payload.decode()
+        print(f"[MQTT] Comando recibido: {comando}")
+        # Aquí podrías procesar comandos remotos en el futuro
+        # Por ejemplo: si comando == "RESET": estado = "NORMAL"
+
+# Crear cliente MQTT
+client = mqtt.Client(client_id="RaspberryPI_Casa", protocol=mqtt.MQTTv311)
+client.on_connect = on_connect
+client.on_disconnect = on_disconnect
+client.on_publish = on_publish
+client.on_message = on_message
+
+# Conectarse al broker
+try:
+    print(f"[MQTT] Conectando a {BROKER}:{PUERTO}...")
+    client.connect(BROKER, PUERTO, KEEPALIVE)
+    client.loop_start()  # Inicia el bucle de red en background
+except Exception as e:
+    print(f"[MQTT] Error al conectar: {e}")
+
+
+# ===== FUNCIONES MQTT =====
+def publicar_mqtt(tema, valor):
+    """Publica un mensaje en MQTT de forma segura"""
+    if mqtt_conectado:
+        try:
+            result = client.publish(tema, str(valor), qos=1)
+            if result.rc != mqtt.MQTT_ERR_SUCCESS:
+                print(f"[MQTT] Error al publicar en {tema}: {result.rc}")
+        except Exception as e:
+            print(f"[MQTT] Excepción al publicar: {e}")
+    else:
+        print(f"[MQTT] No conectado. No se publica {tema}")
+
+def publicar_estado_completo(distancia, persona, salida_recomendada):
+    """Publica todos los sensores y estados al broker (Publish step 3)"""
+    # PUBLISH: Estado del sistema
+    publicar_mqtt(TOPICS["estado"], estado)
+    
+    # PUBLISH: Datos del sensor ultrasonido
+    publicar_mqtt(TOPICS["distancia"], round(distancia, 2))
+    publicar_mqtt(TOPICS["presencia"], "Sí" if persona else "No")
+    
+    # PUBLISH: Salida recomendada
+    publicar_mqtt(TOPICS["salida_recomendada"], salida_recomendada)
+    
+    # PUBLISH: Estado del buzzer
+    buzzer_estado = "Activado" if GPIO.input(BUZZER) else "Desactivado"
+    publicar_mqtt(TOPICS["buzzer"], buzzer_estado)
 
 def medir_distancia():
     GPIO.output(TRIG, False)
@@ -138,90 +224,132 @@ def alarma_buzzer():
     GPIO.output(BUZZER, GPIO.LOW)
     time.sleep(0.2)
 
-def aplicar_estado():
+def aplicar_estado(persona):
+    """Aplica el estado actual del sistema y actualiza salida recomendada
+    
+    Args:
+        persona (bool): Si se detecta persona en el sensor
+    
+    Returns:
+        str: Salida recomendada (A, B, o "N/A")
+    """
     apagar_todo()
-    persona = hay_persona()
+    salida_recomendada = "N/A"
 
     if estado == "NORMAL":
         puerta_abierta()
         mensaje_lcd("SISTEMA ACTIVO", "Sin emergencia")
-        print("Sistema normal")
+        print("[SISTEMA] Estado: NORMAL - Sistema funcionando")
+        salida_recomendada = "N/A"
 
     elif estado == "A":
         GPIO.output(LED_ROJO_A, GPIO.HIGH)     # Zona A peligrosa
         
         if persona:
-            GPIO.output(LED_VERDE_B, GPIO.HIGH)    #usar salida B
+            # Persona detectada en zona A peligrosa -> usar salida B
+            GPIO.output(LED_VERDE_B, GPIO.HIGH)    
             puerta_cerrada()
-            mensaje_lcd("ALERTA INCENDIO Zona A", "Evacuar por B")
-            print("Persona detectada. Incendio A -> usar salida B")
+            mensaje_lcd("ALERTA INCENDIO!", "Evacuar por SALIDA B")
+            print("[EMERGENCIA] Zona A: PERSONA DETECTADA -> Usar Salida B")
+            salida_recomendada = "B"
         else:
-            mensaje_lcd("Zona A peligro", "Sin personas")
-            print("Incendio A detectado, pero no hay personas")
+            # No hay personas, mantenerlo visible pero sin dar salida
+            mensaje_lcd("Zona A peligro", "Sin personas actualmente")
+            print("[ALERTA] Zona A: Incendio detectado, sin personas por ahora")
+            salida_recomendada = "N/A"
 
     elif estado == "B":
         GPIO.output(LED_ROJO_B, GPIO.HIGH)     # Zona B peligrosa
         
         if persona:
-            GPIO.output(LED_VERDE_A, GPIO.HIGH)   #usar salida A
+            # Persona detectada en zona B peligrosa -> usar salida A
+            GPIO.output(LED_VERDE_A, GPIO.HIGH)   
             puerta_cerrada()
-            mensaje_lcd("ALERTA INCENDIO Zona B", "Evacuar por A")
-            print("Persona detectada. Incendio B -> usar salida A")
+            mensaje_lcd("ALERTA INCENDIO!", "Evacuar por SALIDA A")
+            print("[EMERGENCIA] Zona B: PERSONA DETECTADA -> Usar Salida A")
+            salida_recomendada = "A"
         else:
-            mensaje_lcd("Zona B peligro", "Sin personas")
-            print("Incendio B detectado, pero no hay personas")
+            # No hay personas, mantenerlo visible pero sin dar salida
+            mensaje_lcd("Zona B peligro", "Sin personas actualmente")
+            print("[ALERTA] Zona B: Incendio detectado, sin personas por ahora")
+            salida_recomendada = "N/A"
+
+    return salida_recomendada
+
 
 
 try:
-    aplicar_estado()
+    print("\n" + "="*50)
+    print("SISTEMA DE EVACUACION DE INCENDIOS INICIADO")
+    print("="*50 + "\n")
+    
+    salida_recomendada = "N/A"
     ultimo_estado = estado
-    ultimo_envio = 0
+    persona_anterior = None
+    buzzer_activo = False
+    distancia_actual = 0
 
     while True:
+        # ===== LECTURA DE SENSORES =====
+        distancia_actual = medir_distancia()
         
-        distancia = medir_distancia()
-
-        if distancia < 10:
+        # SUBSCRIBE: Interpretar datos del sensor (paso 2)
+        if distancia_actual < 10:
             persona_detectada = True
         else:
             persona_detectada = False
         
-        publicar_mqtt(distancia, persona_detectada)
-        
-        if time.time() - ultimo_envio > 2:  # cada 1 segundo
-            publicar_mqtt(distancia, persona_detectada)
-            ultimo_envio = time.time()
-        
+        # ===== DETECCION DE BOTONES =====
         if GPIO.input(BOTON_A) == GPIO.LOW:
             if estado == "A":
                 estado = "NORMAL"
+                print("\n[BOTON A] Presionado - Cancelando emergencia A")
             else:
                 estado = "A"
-            time.sleep(0.2)
+                print("\n[BOTON A] Presionado - Emergencia en ZONA A")
+            time.sleep(0.3)  # Debounce
 
         if GPIO.input(BOTON_B) == GPIO.LOW:
             if estado == "B":
                 estado = "NORMAL"
+                print("\n[BOTON B] Presionado - Cancelando emergencia B")
             else:
                 estado = "B"
-            time.sleep(0.2)
-
-        if estado != ultimo_estado:
-            aplicar_estado()
+                print("\n[BOTON B] Presionado - Emergencia en ZONA B")
+            time.sleep(0.3)  # Debounce
+        
+        # ===== APLICAR CAMBIOS DE ESTADO =====
+        if estado != ultimo_estado or persona_detectada != persona_anterior:
+            salida_recomendada = aplicar_estado(persona_detectada)
             ultimo_estado = estado
-            
-        if estado in ["A", "B"] and persona_detectada:  #ALARMA SI HAY PERSONAS
+            persona_anterior = persona_detectada
+        
+        # ===== ACTIVAR ALARMA SI NECESARIO =====
+        if estado in ["A", "B"] and persona_detectada:
+            buzzer_activo = True
             alarma_buzzer()
         else:
+            if buzzer_activo:
+                buzzer_activo = False
             GPIO.output(BUZZER, GPIO.LOW)
-
-        time.sleep(0.05)
+        
+        # ===== PUBLICAR EN MQTT (cada 1 segundo) =====
+        if time.time() - ultimo_envio_mqtt > 1.0:
+            publicar_estado_completo(distancia_actual, persona_detectada, salida_recomendada)
+            ultimo_envio_mqtt = time.time()
+        
+        time.sleep(0.05)  # Loop cada 50ms para responsive buttons
 
 
 except KeyboardInterrupt:
-    print("Apagando sistema...")
+    print("\n\n" + "="*50)
+    print("APAGANDO SISTEMA...")
+    print("="*50)
     apagar_todo()
     puerta_abierta()
     pwm.stop()
     lcd.clear()
+    client.loop_stop()
+    client.disconnect()
     GPIO.cleanup()
+    print("Sistema apagado correctamente.\n")
