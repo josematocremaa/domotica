@@ -7,16 +7,26 @@ GPIO.setmode(GPIO.BCM)
 GPIO.setwarnings(False)
 
 # ===== CONFIGURACION GPIO =====
-LED_ROJO_A = 17      # Peligro zona A
-LED_ROJO_B = 27      # Peligro zona B
-LED_VERDE_A = 22     # Salida A segura
-LED_VERDE_B = 23     # Salida B segura
+LED_ROJO_A = 27      # Peligro zona A
+LED_ROJO_B = 17      # Peligro zona B
+LED_VERDE_A = 23     # Salida A segura
+LED_VERDE_B = 22     # Salida B segura
 
 BOTON_A = 5          # Emergencia zona A
 BOTON_B = 6          # Emergencia zona B
 
 BUZZER = 25
-SERVO = 12
+
+# ===== CONFIGURACION SERVO =====
+# Servo único que controla ambas puertas
+SERVO = 12         # Servo para ambas salidas
+
+# Tipo de servo: "standar" o "continuo"
+TIPO_SERVO = "standar"  # Servo estándar M-1504D
+
+# Para servo STANDAR: posiciones en duty cycle
+SERVO_ABIERTO = 8    # Posición para abrir ambas puertas
+SERVO_CERRADO = 4   # Posición para cerrar ambas puertas
 
 # LCD
 lcd = CharLCD(
@@ -138,7 +148,7 @@ def publicar_mqtt(tema, valor):
     else:
         print(f"[MQTT] No conectado. No se publica {tema}")
 
-def publicar_estado_completo(distancia, persona, salida_recomendada):
+def publicar_estado_completo(distancia, persona, salida_recomendada, buzzer_activo):
     """Publica todos los sensores y estados al broker (Publish step 3)"""
     # PUBLISH: Estado del sistema
     publicar_mqtt(TOPICS["estado"], estado)
@@ -151,7 +161,7 @@ def publicar_estado_completo(distancia, persona, salida_recomendada):
     publicar_mqtt(TOPICS["salida_recomendada"], salida_recomendada)
     
     # PUBLISH: Estado del buzzer
-    buzzer_estado = "Activado" if GPIO.input(BUZZER) else "Desactivado"
+    buzzer_estado = "Activado" if buzzer_activo else "Desactivado"
     publicar_mqtt(TOPICS["buzzer"], buzzer_estado)
 
 def medir_distancia():
@@ -189,24 +199,46 @@ def apagar_todo():
     GPIO.output(LED_VERDE_A, GPIO.LOW)
     GPIO.output(LED_VERDE_B, GPIO.LOW)
     GPIO.output(BUZZER, GPIO.LOW)
+
+def mover_servo(accion):
+    """Mueve el servo único que controla ambas puertas
     
+    Args:
+        accion (str): "abierto" o "cerrado"
+    """
+    if TIPO_SERVO == "continuo":
+        if accion == "abierto":
+            pwm.ChangeDutyCycle(5)
+            time.sleep(TIEMPO_SERVO_ABIERTO)
+            pwm.ChangeDutyCycle(0)
+        elif accion == "cerrado":
+            pwm.ChangeDutyCycle(10)
+            time.sleep(TIEMPO_SERVO_CERRADO)
+            pwm.ChangeDutyCycle(0)
+    else:  # servo standar
+        duty = SERVO_ABIERTO if accion == "abierto" else SERVO_CERRADO
+        pwm.ChangeDutyCycle(duty)
+        time.sleep(0.5)
+        pwm.ChangeDutyCycle(0)
+
+def inicializar_servo():
+    """Inicializa el servo en posición CERRADA al arrancar"""
+    print("[SISTEMA] Inicializando servo en posición CERRADA...")
+    puerta_cerrada()
+    print("[SISTEMA] Servo listo")
+
 def modo_normal():
     apagar_todo()
     GPIO.output(BUZZER, False)
     puerta_abierta()
     
-def mover_servo(duty):
-    pwm.ChangeDutyCycle(duty)
-    time.sleep(0.5)
-    pwm.ChangeDutyCycle(0)
-
-
 def puerta_abierta():
-    mover_servo(2)
-
+    """Abre ambas puertas con el servo único"""
+    mover_servo("abierto")
 
 def puerta_cerrada():
-    mover_servo(7)
+    """Cierra ambas puertas con el servo único"""
+    mover_servo("cerrado")
     
 def mensaje_lcd(linea1, linea2=""):
     lcd.clear()
@@ -237,7 +269,7 @@ def aplicar_estado(persona):
     salida_recomendada = "N/A"
 
     if estado == "NORMAL":
-        puerta_abierta()
+        puerta_abierta()  # Abre ambas puertas
         mensaje_lcd("SISTEMA ACTIVO", "Sin emergencia")
         print("[SISTEMA] Estado: NORMAL - Sistema funcionando")
         salida_recomendada = "N/A"
@@ -247,13 +279,14 @@ def aplicar_estado(persona):
         
         if persona:
             # Persona detectada en zona A peligrosa -> usar salida B
-            GPIO.output(LED_VERDE_B, GPIO.HIGH)    
-            puerta_cerrada()
+            GPIO.output(LED_VERDE_B, GPIO.HIGH)
+            puerta_abierta()  # Abre ambas puertas para evacuación
             mensaje_lcd("ALERTA INCENDIO!", "Evacuar por SALIDA B")
             print("[EMERGENCIA] Zona A: PERSONA DETECTADA -> Usar Salida B")
             salida_recomendada = "B"
         else:
-            # No hay personas, mantenerlo visible pero sin dar salida
+            # No hay personas, cerrar puertas por seguridad
+            puerta_cerrada()
             mensaje_lcd("Zona A peligro", "Sin personas actualmente")
             print("[ALERTA] Zona A: Incendio detectado, sin personas por ahora")
             salida_recomendada = "N/A"
@@ -263,13 +296,14 @@ def aplicar_estado(persona):
         
         if persona:
             # Persona detectada en zona B peligrosa -> usar salida A
-            GPIO.output(LED_VERDE_A, GPIO.HIGH)   
-            puerta_cerrada()
+            GPIO.output(LED_VERDE_A, GPIO.HIGH)
+            puerta_abierta()  # Abre ambas puertas para evacuación
             mensaje_lcd("ALERTA INCENDIO!", "Evacuar por SALIDA A")
             print("[EMERGENCIA] Zona B: PERSONA DETECTADA -> Usar Salida A")
             salida_recomendada = "A"
         else:
-            # No hay personas, mantenerlo visible pero sin dar salida
+            # No hay personas, cerrar puertas por seguridad
+            puerta_cerrada()
             mensaje_lcd("Zona B peligro", "Sin personas actualmente")
             print("[ALERTA] Zona B: Incendio detectado, sin personas por ahora")
             salida_recomendada = "N/A"
@@ -282,6 +316,9 @@ try:
     print("\n" + "="*50)
     print("SISTEMA DE EVACUACION DE INCENDIOS INICIADO")
     print("="*50 + "\n")
+    
+    # Inicializar servos en posición cerrada
+    inicializar_servo()
     
     salida_recomendada = "N/A"
     ultimo_estado = estado
@@ -335,7 +372,7 @@ try:
         
         # ===== PUBLICAR EN MQTT (cada 1 segundo) =====
         if time.time() - ultimo_envio_mqtt > 1.0:
-            publicar_estado_completo(distancia_actual, persona_detectada, salida_recomendada)
+            publicar_estado_completo(distancia_actual, persona_detectada, salida_recomendada, buzzer_activo)
             ultimo_envio_mqtt = time.time()
         
         time.sleep(0.05)  # Loop cada 50ms para responsive buttons
@@ -346,7 +383,7 @@ except KeyboardInterrupt:
     print("APAGANDO SISTEMA...")
     print("="*50)
     apagar_todo()
-    puerta_abierta()
+    # El servo se detiene automáticamente
     pwm.stop()
     lcd.clear()
     client.loop_stop()

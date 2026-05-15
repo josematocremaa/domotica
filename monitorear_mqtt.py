@@ -1,8 +1,4 @@
 #!/usr/bin/env python3
-"""
-Script para monitorear en tiempo real todos los tópicos MQTT del sistema de evacuación
-Uso: python3 monitorear_mqtt.py
-"""
 
 import paho.mqtt.client as mqtt
 import time
