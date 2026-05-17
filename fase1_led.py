@@ -18,13 +18,11 @@ BOTON_B = 6          # Emergencia zona B
 BUZZER = 25
 
 # ===== CONFIGURACION SERVO =====
-# Servo único que controla ambas puertas
 SERVO = 12         # Servo para ambas salidas
 
 # Tipo de servo: "standar" o "continuo"
 TIPO_SERVO = "standar"  # Servo estándar M-1504D
 
-# Para servo STANDAR: posiciones en duty cycle
 SERVO_ABIERTO = 8    # Posición para abrir ambas puertas
 SERVO_CERRADO = 4   # Posición para cerrar ambas puertas
 
@@ -92,7 +90,6 @@ def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("[MQTT] Conexión exitosa al broker")
         mqtt_conectado = True
-        # Suscribirse a tópicos (si en el futuro quieres comandos remotos)
         client.subscribe(TOPICS["comando"])
         print(f"[MQTT] Suscrito a: {TOPICS['comando']}")
     else:
@@ -108,7 +105,7 @@ def on_disconnect(client, userdata, rc):
 
 def on_publish(client, userdata, mid):
     """Callback ejecutado cuando se publica un mensaje"""
-    pass  # Opcional: usar para debug
+    pass  
 
 def on_message(client, userdata, msg):
     """Callback ejecutado cuando se recibe un mensaje en un tópico suscrito"""
@@ -116,8 +113,6 @@ def on_message(client, userdata, msg):
     if msg.topic == TOPICS["comando"]:
         comando = msg.payload.decode()
         print(f"[MQTT] Comando recibido: {comando}")
-        # Aquí podrías procesar comandos remotos en el futuro
-        # Por ejemplo: si comando == "RESET": estado = "NORMAL"
 
 # Crear cliente MQTT
 client = mqtt.Client(client_id="RaspberryPI_Casa", protocol=mqtt.MQTTv311)
@@ -203,8 +198,6 @@ def apagar_todo():
 def mover_servo(accion):
     """Mueve el servo único que controla ambas puertas
     
-    Args:
-        accion (str): "abierto" o "cerrado"
     """
     if TIPO_SERVO == "continuo":
         if accion == "abierto":
@@ -280,7 +273,7 @@ def aplicar_estado(persona):
         if persona:
             # Persona detectada en zona A peligrosa -> usar salida B
             GPIO.output(LED_VERDE_B, GPIO.HIGH)
-            puerta_abierta()  # Abre ambas puertas para evacuación
+            puerta_abierta() 
             mensaje_lcd("ALERTA INCENDIO!", "Evacuar por SALIDA B")
             print("[EMERGENCIA] Zona A: PERSONA DETECTADA -> Usar Salida B")
             salida_recomendada = "B"
@@ -297,7 +290,7 @@ def aplicar_estado(persona):
         if persona:
             # Persona detectada en zona B peligrosa -> usar salida A
             GPIO.output(LED_VERDE_A, GPIO.HIGH)
-            puerta_abierta()  # Abre ambas puertas para evacuación
+            puerta_abierta() 
             mensaje_lcd("ALERTA INCENDIO!", "Evacuar por SALIDA A")
             print("[EMERGENCIA] Zona B: PERSONA DETECTADA -> Usar Salida A")
             salida_recomendada = "A"

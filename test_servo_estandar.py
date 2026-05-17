@@ -6,16 +6,15 @@ GPIO.setwarnings(False)
 
 SERVO = 12
 
-# Valores calibrados para servo estándar M-1504D
-SERVO_ABIERTO = 8    # Ajusta según calibración
-SERVO_CERRADO = 4   # Ajusta según calibración
+SERVO_ABIERTO = 8    
+SERVO_CERRADO = 4   
 
 GPIO.setup(SERVO, GPIO.OUT)
 pwm = GPIO.PWM(SERVO, 50)
 pwm.start(0)
 
 print("\n" + "="*60)
-print("TEST DE SERVO ESTÁNDAR M-1504D")
+print("TEST DE SERVO ")
 print("="*60)
 print(f"Posición ABIERTA:  duty {SERVO_ABIERTO}%")
 print(f"Posición CERRADA:  duty {SERVO_CERRADO}%\n")
@@ -60,9 +59,6 @@ try:
     time.sleep(0.5)
     pwm.ChangeDutyCycle(0)
 
-    print("\n✓ Test completado exitosamente")
-    print("\nSi las posiciones no son correctas, ejecuta:")
-    print("python3 /home/pi/Desktop/ProyectoDomotica/calibrar_servo_estandar.py")
 
 finally:
     pwm.stop()

@@ -77,8 +77,6 @@ def main():
         client.loop_forever()
     except ConnectionRefusedError:
         print(color("✗ Error: No se puede conectar al broker.", "ROJO"))
-        print(color("  ¿Está mosquitto corriendo?", "AMARILLO"))
-        print(f"  Ejecuta: mosquitto -v")
     except KeyboardInterrupt:
         print(f"\n\n{color('Desconectando...', 'AMARILLO')}")
         client.disconnect()
